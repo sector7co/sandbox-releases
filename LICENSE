@@ -1,0 +1,24 @@
+sandbox — Binary Distribution Notice
+
+Copyright (c) 2026 sector7co. All rights reserved, except as expressly granted below.
+
+The compiled "sandbox" binaries distributed in this repository (the "Binaries") are
+made available AS IS, WITHOUT WARRANTY OF ANY KIND, express or implied, including but
+not limited to the warranties of merchantability, fitness for a particular purpose,
+and noninfringement. In no event shall the copyright holder be liable for any claim,
+damages, or other liability arising from, out of, or in connection with the Binaries
+or their use.
+
+You are granted a non-exclusive, royalty-free, worldwide license to:
+  - download the Binaries;
+  - install and run the Binaries;
+  - use the Binaries for personal or internal business purposes; and
+  - cache or mirror the Binaries for the purpose of installation
+    (for example: an internal proxy, a CI cache, or a package manager tap).
+
+This grant does NOT permit repackaging, rebranding, or reselling the Binaries as a
+product. No other rights are granted, whether by implication, estoppel, or otherwise.
+
+The source code is not distributed here and remains private. This notice governs only
+the Binaries. If and when the source is published, it will be offered under separate
+open-source terms that only widen — never revoke — the rights granted above.

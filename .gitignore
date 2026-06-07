@@ -1,0 +1,4 @@
+.DS_Store
+# Release artifacts live only as GitHub Release assets, never committed to the tree.
+*.tar.gz
+SHA256SUMS
