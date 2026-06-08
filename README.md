@@ -2,14 +2,14 @@
 
 Public release mirror for **sandbox**, an egress-restricted OCI sandbox launcher.
 
-The source repository is private. This repository holds only the published macOS release
-binaries (as GitHub Releases) and a minimal binary-distribution notice. The binaries are
+The source repository is private. This repository holds only the published macOS and Linux
+release binaries (as GitHub Releases) and a minimal binary-distribution notice. The binaries are
 provided **as is**; see [`LICENSE`](./LICENSE) for the warranty disclaimer and the permitted
 and forbidden acts.
 
 ## Install
 
-**macOS (Apple Silicon):**
+**macOS (Apple Silicon) and Linux (x86_64 / aarch64)** — the installer auto-detects your platform:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/sector7co/sandbox-releases/main/install.sh | bash
@@ -45,13 +45,16 @@ default `~/.sandbox` to delete it.
 <details>
 <summary>Manual install (no installer)</summary>
 
-1. Download the `.tar.gz` and `SHA256SUMS` from the
-   [latest release](https://github.com/sector7co/sandbox-releases/releases/latest).
-   Current builds target **macOS arm64 (Apple Silicon)**.
-2. Verify integrity (checks only the file you downloaded, so it stays correct once more
-   platforms ship): `grep 'aarch64-apple-darwin\.tar\.gz$' SHA256SUMS | shasum -a 256 -c -`
+1. Download the `.tar.gz` for your platform and `SHA256SUMS` from the
+   [latest release](https://github.com/sector7co/sandbox-releases/releases/latest). Builds target
+   **macOS arm64** (`aarch64-apple-darwin`) and **Linux x86_64 / aarch64**
+   (`x86_64-unknown-linux-musl` / `aarch64-unknown-linux-musl`, static — runs on any Linux).
+2. Verify integrity. `SHA256SUMS` lists every platform, so verify just the tarball you downloaded —
+   this form is portable across GNU coreutils, BusyBox/Alpine, and macOS:
+   - Linux: `grep " $(ls sandbox-*-*.tar.gz)$" SHA256SUMS | sha256sum -c -`
+   - macOS: `grep " $(ls sandbox-*-*.tar.gz)$" SHA256SUMS | shasum -a 256 -c -`
 3. Extract & install onto your PATH (no sudo):
-   `tar -xzf sandbox-*-aarch64-apple-darwin.tar.gz && mkdir -p ~/.local/bin && install -m 0755 sandbox ~/.local/bin/sandbox`
+   `tar -xzf sandbox-*-*.tar.gz && mkdir -p ~/.local/bin && install -m 0755 sandbox ~/.local/bin/sandbox`
    — then make sure `~/.local/bin` is on your `PATH`
    (`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`).
 4. Confirm: `sandbox --version`
@@ -62,17 +65,17 @@ default `~/.sandbox` to delete it.
 
 </details>
 
-Linux / x86_64 are not yet supported (the installer fails loud on other platforms;
-tracked in the source repo's issue #58).
-
-Running a sandbox requires a container engine (Docker / OrbStack, or Apple `container`).
+Running a sandbox requires a container engine — Docker / OrbStack or Apple `container` on macOS,
+Docker or Podman on Linux.
 The `sandbox` binary itself is self-contained — recipes, registry, and image pins are
 embedded; no `python3` or other runtime is needed.
 
 ## Integrity & signing status
 
-Every release ships a `SHA256SUMS` covering all artifacts. This provides **integrity** — it
-detects download corruption; verify with `shasum -a 256 -c SHA256SUMS`. It is **not** an
+Every release ships a `SHA256SUMS` covering all platform artifacts. This provides **integrity** —
+it detects download corruption; verify the tarball you downloaded (portable across GNU coreutils,
+BusyBox/Alpine, and macOS) with `grep " $(ls sandbox-*-*.tar.gz)$" SHA256SUMS | sha256sum -c -`
+(Linux) or `… | shasum -a 256 -c -` (macOS). It is **not** an
 authenticity guarantee: `SHA256SUMS` is published unsigned alongside the binaries, so it does
 not prove who produced them or that they were not tampered with at the source. The installer
 verifies this checksum fail-closed, but inherits the same limitation. Signing `SHA256SUMS`

@@ -3,7 +3,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/sector7co/sandbox-releases/main/install.sh | less
 #
-# What it does: resolves the latest (or $SANDBOX_VERSION) macOS-arm64 `sandbox` release from the
+# What it does: detects your platform (macOS arm64 / Linux x86_64 / Linux aarch64), resolves the
+# latest (or $SANDBOX_VERSION) matching `sandbox` release from the
 # public mirror, downloads the tarball + SHA256SUMS, verifies the SHA-256 FAIL-CLOSED (before
 # extracting), installs the one self-contained binary to ~/.sandbox/bin, and wires PATH via an
 # installer-owned ~/.sandbox/env sourced from your shell startup file. Re-running upgrades in
@@ -14,7 +15,9 @@
 # NOT defend against a full mirror compromise that rewrites both. Signed checksums are tracked
 # in sector7co/sandbox#81 (ties #46). See this repo's README "Integrity & signing status".
 #
-# Scope: macOS arm64 (Apple Silicon) only — fails loud elsewhere. Linux / x86_64 = sandbox#58.
+# Scope: macOS arm64 (Apple Silicon) + Linux x86_64 / aarch64 (static musl). The Linux binaries are
+# fully static and run on any Linux. Auto-detects the platform and fails loud on anything else
+# (Intel/universal macOS and Windows are not built).
 set -eu
 
 # ----- overridable configuration -----
@@ -22,7 +25,11 @@ REPO="${SANDBOX_RELEASES_REPO:-sector7co/sandbox-releases}"
 PREFIX="${SANDBOX_INSTALL:-${HOME:?set SANDBOX_INSTALL or HOME}/.sandbox}"
 BIN_DIR="$PREFIX/bin"
 ENV_FILE="$PREFIX/env"
-ASSET_ARCH="aarch64-apple-darwin"   # hardcoded; never derived from uname
+# ASSET_ARCH (the release triple) + _engine_hint are set by check_platform from (uname -s, uname -m);
+# never hardcoded. SHA_CMD is chosen by detect_sha (shasum on macOS, sha256sum on Linux).
+ASSET_ARCH=''
+_engine_hint=''
+SHA_CMD=''
 # A collision-proof, full-line sentinel the installer alone writes into rc files. Both the
 # install guard and the uninstaller key on this exact string, so neither touches user lines.
 MARKER="# added by the sandbox installer (https://github.com/sector7co/sandbox-releases)"
@@ -48,6 +55,20 @@ need_cmd() {
     done
 }
 
+# Pick the available SHA-256 tool: `shasum -a 256` (macOS / Perl) or `sha256sum` (Linux coreutils).
+# Both emit "<hash>␣␣<file>", so the field-1 extraction (`awk '{print $1}'`) is identical, and the
+# downloaded SHA256SUMS is parsed tool-agnostically (the awk in install_sandbox). Fail loud if neither
+# exists, so verification can never be silently skipped.
+detect_sha() {
+    if command -v shasum >/dev/null 2>&1; then
+        SHA_CMD="shasum -a 256"
+    elif command -v sha256sum >/dev/null 2>&1; then
+        SHA_CMD="sha256sum"
+    else
+        die "need a SHA-256 tool to verify the download: install 'shasum' (macOS) or 'sha256sum' (Linux/coreutils)."
+    fi
+}
+
 # Hardened transfers. -f: no HTTP-error body. -L: follow GitHub's 302 to the CDN.
 # --proto '=https'/--tlsv1.2: refuse any non-HTTPS (incl. a downgrade in a redirect).
 # --max-time bounds each attempt; --retry-max-time bounds the whole retry sequence
@@ -64,13 +85,28 @@ http_get_file() {   # http_get_file URL DEST
          -o "$2" "$1"
 }
 
+# Detect the platform and set ASSET_ARCH (the release triple) + _engine_hint (both globals, read by
+# install_sandbox). Fails loud on anything unsupported — never mis-maps to a non-existent asset.
 check_platform() {
     _os="$(uname -s)"
-    [ "$_os" = Darwin ] || die "macOS only — this installer supports darwin-arm64 (got '$_os'). Linux support: sandbox#58."
     _arch="$(uname -m)"
-    case "$_arch" in
-        arm64|aarch64) ;;
-        *) die "Apple Silicon (arm64) only (got '$_arch'). x86_64 support: sandbox#58." ;;
+    case "$_os" in
+        Darwin)
+            case "$_arch" in
+                arm64 | aarch64) ASSET_ARCH="aarch64-apple-darwin" ;;
+                x86_64) die "Intel macOS is not built. If you are on Apple Silicon, run the installer in a native arm64 shell — you may be under Rosetta (x86_64 emulation). (Intel/universal macOS: sandbox#58 follow-up.)" ;;
+                *) die "unsupported macOS architecture '$_arch' (supported: Apple Silicon arm64)." ;;
+            esac
+            _engine_hint="Docker/OrbStack or Apple container" ;;
+        Linux)
+            case "$_arch" in
+                x86_64) ASSET_ARCH="x86_64-unknown-linux-musl" ;;
+                aarch64 | arm64) ASSET_ARCH="aarch64-unknown-linux-musl" ;;
+                *) die "unsupported Linux architecture '$_arch' (supported: x86_64, aarch64)." ;;
+            esac
+            _engine_hint="Docker or Podman" ;;
+        *)
+            die "unsupported platform: os='$_os' arch='$_arch' (supported: macOS arm64, Linux x86_64/aarch64; Windows is not built)." ;;
     esac
 }
 
@@ -181,7 +217,9 @@ install_sandbox() {
     # to a substring/regex match.
     _expected="$(awk -v f="$_asset" '{ n=$2; sub(/^[*]/,"",n); sub(/^\.\//,"",n) } n == f { print $1 }' "$_tmp/SHA256SUMS")"
     [ -n "$_expected" ] || die "no checksum for $_asset in SHA256SUMS — refusing to install"
-    _actual="$(shasum -a 256 "$_tmp/$_asset" | awk '{ print $1 }')"
+    # $SHA_CMD ("shasum -a 256" or "sha256sum") is INTENTIONALLY word-split into its tokens.
+    # shellcheck disable=SC2086
+    _actual="$($SHA_CMD "$_tmp/$_asset" | awk '{ print $1 }')"
     [ "$_expected" = "$_actual" ] || die "checksum mismatch for $_asset (expected $_expected, got $_actual) — refusing to install"
     info "Checksum verified."
 
@@ -199,9 +237,9 @@ install_sandbox() {
         info "${_bold}Installed: ${_v}${_reset}"
         info "  location: $BIN_DIR/sandbox"
         if [ "$_recognized" -eq 1 ]; then
-            info "  next:     sandbox --help   (running a sandbox needs a container engine: Docker/OrbStack or Apple container)"
+            info "  next:     sandbox --help   (running a sandbox needs a container engine: $_engine_hint)"
         else
-            info "  next:     $BIN_DIR/sandbox --help   (or finish wiring PATH per the note above; running a sandbox needs a container engine: Docker/OrbStack or Apple container)"
+            info "  next:     $BIN_DIR/sandbox --help   (or finish wiring PATH per the note above; running a sandbox needs a container engine: $_engine_hint)"
         fi
     else
         warn "sandbox was installed to $BIN_DIR/sandbox but did not run on this machine."
@@ -223,7 +261,11 @@ uninstall() {
     for _rc in "$HOME/.profile" "$HOME/.zprofile" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bashrc"; do
         [ -f "$_rc" ] || continue
         grep -qF -- "$MARKER" "$_rc" 2>/dev/null || continue
-        _mode="$(stat -f '%Lp' "$_rc" 2>/dev/null || true)"   # preserve the rc's perms across the rewrite
+        # Preserve the rc's perms across the rewrite. GNU FIRST: `stat -c '%a'` (Linux/coreutils +
+        # busybox) succeeds on Linux; BSD `stat -c` fails cleanly (no stdout) so macOS falls through to
+        # `stat -f '%Lp'`. The reverse order is BROKEN on GNU (`stat -f '%Lp' <rc>` treats '%Lp' as a
+        # failing --file-system operand but the rc as a succeeding one, leaking a filesystem dump).
+        _mode="$(stat -c '%a' "$_rc" 2>/dev/null || stat -f '%Lp' "$_rc" 2>/dev/null || true)"
         _trc="$(mktemp "$HOME/.sandbox-rc.XXXXXX")" || die "mktemp failed"
         # grep exit 1 = every line was the marker (legit empty result); >=2 = a real read/write
         # error (e.g. disk full) — never commit a truncated rc in that case.
@@ -258,7 +300,8 @@ main() {
     esac
     [ "${SANDBOX_UNINSTALL:-}" = 1 ] && { uninstall; return 0; }
 
-    need_cmd curl shasum tar awk uname mktemp grep head sed mkdir chmod mv rm
+    need_cmd curl tar awk uname mktemp grep head sed mkdir chmod mv rm
+    detect_sha   # sets SHA_CMD (shasum -a 256 ‖ sha256sum); dies if neither is present
     install_sandbox
 }
 
