@@ -1,0 +1,39 @@
+# Installer negative-regression tests (sandbox#91 + the #81 bad-signature case).
+#
+# Drives install.sh through its FAIL-CLOSED paths (platform gate / asset-404 / tamper /
+# missing-checksum-line / bad-signature) and its don't-brick POLICY GUARDS (unsigned release with a
+# verifier present; verifier too old) using curl/uname/ssh shims + job-generated fixtures — no network,
+# no real release. The whole suite is `test/negative/run.sh`, which is self-contained and also runnable
+# locally; this workflow just runs it on a clean ubuntu (ssh-keygen + coreutils present). A single job
+# covers both verifier states: the bad-signature/unsigned cases use the runner's real ssh-keygen, and
+# the "verifier too old" case shims `ssh -V` to an OpenSSH < 8.2 banner — so no matrix is needed.
+#
+# The harness also asserts the #60 cross-repo rc MARKER string is still exact (a rename fails loud).
+name: installer-negative-tests
+
+on:
+  pull_request:
+    paths:
+      - "install.sh"
+      - "test/negative/**"
+      - ".github/workflows/installer-negative-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  negative:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tooling provenance
+        run: |
+          set -eu
+          ssh -V            # OpenSSH >= 8.2 on ubuntu-24.04 (the verifier install.sh uses)
+          sha256sum --version | head -1
+
+      - name: Run installer negative-regression suite
+        run: sh test/negative/run.sh

@@ -10,10 +10,13 @@
 # installer-owned ~/.sandbox/env sourced from your shell startup file. Re-running upgrades in
 # place. Uninstall with: ... | bash -s -- --uninstall  (or SANDBOX_UNINSTALL=1).
 #
-# Integrity, NOT authenticity: SHA256SUMS is published UNSIGNED, in the same repo as the binary.
-# The checksum detects a corrupt or swapped object IF SHA256SUMS itself arrives intact; it does
-# NOT defend against a full mirror compromise that rewrites both. Signed checksums are tracked
-# in sector7co/sandbox#81 (ties #46). See this repo's README "Integrity & signing status".
+# Authenticity + integrity: SHA256SUMS is SIGNED (an SSH signature, SHA256SUMS.sig). When ssh-keygen
+# (OpenSSH >= 8.2) is present this installer verifies that signature against a PINNED public key BEFORE
+# the checksum compare and FAILS CLOSED on a bad signature. When the verifier or the signature is
+# absent (an older unsigned release, or no OpenSSH), it warns and continues on SHA-256 integrity alone
+# — so signing never bricks an existing install. Residual: a mirror attacker who STRIPS the signature
+# downgrades a verifier-present user to a warning (opt-in signing cannot prevent that without requiring
+# ssh-keygen of everyone). See this repo's README "Integrity & signing status" and sector7co/sandbox#81.
 #
 # Scope: macOS arm64 (Apple Silicon) + Linux x86_64 / aarch64 (static musl). The Linux binaries are
 # fully static and run on any Linux. Auto-detects the platform and fails loud on anything else
@@ -33,6 +36,14 @@ SHA_CMD=''
 # A collision-proof, full-line sentinel the installer alone writes into rc files. Both the
 # install guard and the uninstaller key on this exact string, so neither touches user lines.
 MARKER="# added by the sandbox installer (https://github.com/sector7co/sandbox-releases)"
+
+# SSHSIG authenticity for SHA256SUMS (sandbox#81). The release SHA256SUMS is signed with a standalone
+# Ed25519 SSH key; this pinned pubkey is the root of trust install.sh checks BEFORE trusting the
+# checksum file. Rotation: replace this line + the next release is re-signed — install.sh is fetched
+# fresh from main, so the pin is always current. See this repo's README "Integrity & signing status".
+SANDBOX_SIGNING_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFvEIM3JGElseZXWciGKmSH8KKLpe81FAvOQA8Lun93Y"
+SANDBOX_SIGNING_PRINCIPAL="releases@sector7co"
+SANDBOX_SIGNING_NAMESPACE="sandbox-releases"
 
 # Color is filled in by setup_colors() only when stdout is a TTY; default empty (set -u safe).
 _bold=''; _red=''; _yellow=''; _reset=''
@@ -83,6 +94,57 @@ http_get_file() {   # http_get_file URL DEST
     curl --proto '=https' --tlsv1.2 -fsSL \
          --retry 3 --connect-timeout 10 --max-time 300 --retry-max-time 360 \
          -o "$2" "$1"
+}
+
+# Verify the SHA256SUMS SSH signature (#81) against the pinned key BEFORE its contents are trusted, so
+# the SHA-256 compare binds the tarball to an AUTHENTICATED checksum file. Returns 0 to proceed
+# (verified, OR warn-and-continue when the verifier/signature is absent — the documented policy); calls
+# die() ONLY on a present-and-BAD signature. ssh-keygen is intentionally NOT in need_cmd — verification
+# is best-effort by policy, never a hard prerequisite.
+verify_authenticity() {   # verify_authenticity STAGING_DIR   (also reads global $_base, set by install_sandbox before the call)
+    _t="$1"
+
+    # Verifier usable? Need ssh + ssh-keygen AND OpenSSH >= 8.2 (where `-Y verify -f allowed_signers` is
+    # reliably supported; matches git's SSH-signature verification floor). Parse `ssh -V` defensively and
+    # FAIL SOFT — absent/unparseable/too-old is "verifier unavailable" (warn-continue), NEVER a die. The
+    # floor is safety-critical: a too-old ssh-keygen that errors on `-Y verify` must not be mistaken for
+    # a bad signature.
+    if ! command -v ssh-keygen >/dev/null 2>&1 || ! command -v ssh >/dev/null 2>&1; then
+        warn "ssh-keygen not found; skipping authenticity check (SHA-256 integrity still enforced)."
+        warn "Install OpenSSH (>= 8.2) for full release verification."
+        return 0
+    fi
+    _v="$(ssh -V 2>&1)"; _v="${_v#OpenSSH_}"            # e.g. "9.7p1, LibreSSL ..."
+    _maj="${_v%%.*}"; _rest="${_v#*.}"; _min="${_rest%%[!0-9]*}"
+    case "$_maj.$_min" in *[!0-9.]*|.*|*.|"") _maj=0; _min=0 ;; esac   # unparseable -> treat as too old
+    _ok=0
+    if [ "$_maj" -gt 8 ]; then _ok=1
+    elif [ "$_maj" -eq 8 ] && [ "$_min" -ge 2 ]; then _ok=1
+    fi
+    if [ "$_ok" -ne 1 ]; then
+        warn "OpenSSH ${_maj}.${_min} cannot verify release signatures (need >= 8.2); skipping authenticity (integrity still enforced)."
+        return 0
+    fi
+
+    # Fetch the detached signature. ANY non-zero curl (a 404 for an unsigned release such as v0.2.0, but
+    # equally a 5xx / TLS reset / post-retry timeout) is treated as "no signature available" ->
+    # warn-continue: http_get_file yields only a boolean and we deliberately do NOT inspect the HTTP
+    # status (sniffing wouldn't stop an on-path attacker who can forge a 404, and a legitimately-absent
+    # .sig must not be a hard error under the warn-and-continue policy).
+    if ! http_get_file "$_base/SHA256SUMS.sig" "$_t/SHA256SUMS.sig" >/dev/null 2>&1; then
+        warn "this release is not signed (no SHA256SUMS.sig); verified SHA-256 integrity only."
+        return 0
+    fi
+
+    # Verify the signature over SHA256SUMS against the pinned key. Build a one-line allowed_signers and
+    # rely on EXIT STATUS, never stderr text (matches this script's curl philosophy).
+    printf '%s %s\n' "$SANDBOX_SIGNING_PRINCIPAL" "$SANDBOX_SIGNING_PUBKEY" > "$_t/allowed_signers"
+    if ssh-keygen -Y verify -f "$_t/allowed_signers" -I "$SANDBOX_SIGNING_PRINCIPAL" \
+         -n "$SANDBOX_SIGNING_NAMESPACE" -s "$_t/SHA256SUMS.sig" < "$_t/SHA256SUMS" >/dev/null 2>&1; then
+        info "Authenticity verified. (signed by $SANDBOX_SIGNING_PRINCIPAL)"
+        return 0
+    fi
+    die "SHA256SUMS signature did NOT verify against the pinned release key — refusing to install (signature present but invalid: wrong key or tampered)."
 }
 
 # Detect the platform and set ASSET_ARCH (the release triple) + _engine_hint (both globals, read by
@@ -210,6 +272,10 @@ install_sandbox() {
     info "Downloading sandbox $_ver ($ASSET_ARCH)…"
     http_get_file "$_base/$_asset"     "$_tmp/$_asset"     || die "download failed: $_base/$_asset"
     http_get_file "$_base/SHA256SUMS"  "$_tmp/SHA256SUMS"  || die "download failed: $_base/SHA256SUMS"
+
+    # AUTHENTICITY (#81): verify the SHA256SUMS SSH signature against the pinned key before trusting its
+    # contents. die() only on a present-and-bad signature; warn-and-continue when verifier/sig absent.
+    verify_authenticity "$_tmp"
 
     # FAIL-CLOSED integrity: exact field-2 match (no regex on the name), die if absent, compare,
     # and only then extract. Never skip on a missing line or a missing tool. The leading-`*`/`./`
