@@ -101,7 +101,7 @@ http_get_file() {   # http_get_file URL DEST
 # (verified, OR warn-and-continue when the verifier/signature is absent — the documented policy); calls
 # die() ONLY on a present-and-BAD signature. ssh-keygen is intentionally NOT in need_cmd — verification
 # is best-effort by policy, never a hard prerequisite.
-verify_authenticity() {   # verify_authenticity STAGING_DIR   (reads the global $_base)
+verify_authenticity() {   # verify_authenticity STAGING_DIR   (also reads global $_base, set by install_sandbox before the call)
     _t="$1"
 
     # Verifier usable? Need ssh + ssh-keygen AND OpenSSH >= 8.2 (where `-Y verify -f allowed_signers` is

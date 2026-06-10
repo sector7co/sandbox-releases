@@ -72,10 +72,11 @@ embedded; no `python3` or other runtime is needed.
 
 ## Integrity & signing status
 
-Every release ships a `SHA256SUMS` covering all platform artifacts, **signed** with an SSH signature
-(`SHA256SUMS.sig`). Together they give both **integrity** (the checksum detects download corruption)
-and **authenticity** (the signature proves the checksums were produced by the holder of the release
-signing key).
+Releases are signed with an SSH signature: each ships a `SHA256SUMS` covering all platform artifacts
+plus a `SHA256SUMS.sig` produced by the release signing key, giving both **integrity** (the checksum
+detects download corruption) and **authenticity** (the signature proves who produced the checksums).
+Releases predating signing — including the current `v0.2.0` — ship `SHA256SUMS` only; the installer
+detects the absent signature and continues on SHA-256 integrity alone (see below).
 
 **Signing key (pinned).** `SHA256SUMS` is signed with a standalone Ed25519 SSH key; `install.sh` pins
 its public key as the sole root of trust (there is no certificate chain — the installer trusts exactly
